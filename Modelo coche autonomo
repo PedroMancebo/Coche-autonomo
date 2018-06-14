@@ -1,11 +1,115 @@
-#Subimos los paquetes con 
-from keras import backend as K
-from keras.models import load_model
-from yolo_utils import read_classes, read_anchors, generate_colors, preprocess_image, draw_boxes
-from yad2k.models.keras_yolo import yolo_head
-from app_utils import yolo_eval
-from os import listdir
-from os.path import isfile, join
-import os
+#Subimos los paquetes correspondientes de las librerías de Python
 
-#Ahora procedemos
+import argparse
+import os
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import imshow
+import scipy.io
+import scipy.misc
+import numpy as np
+import pandas as pd
+import PIL
+import tensorflow as tf
+from keras import backend as K
+from keras.layers import Input, Lambda, Conv2D
+from keras.models import load_model, Model
+from yolo_utils import read_classes, read_anchors, generate_colors, preprocess_image, draw_boxes, scale_boxes
+from yad2k.models.keras_yolo import yolo_head, yolo_boxes_to_corners, preprocess_true_boxes, yolo_loss, yolo_body
+
+%matplotlib inline
+
+#A partir de esta función definimos las distintas cajas para los diferentes barridos de cada imagen, esta función nos devuelve además las puntuaciones
+#de cada fragmento de la cada imágen descartadndo aquellas que estén por debajo del threshold que hemos impuesto con valor de 0.6. Como resultado 
+#tenemos las cajas seleccionadas con las probabilidades más altas y también con que clase de objeto las asociamos.
+
+def yolo_filter_boxes(box_confidence, boxes, box_class_probs, threshold = .6):
+    """Filters YOLO boxes by thresholding on object and class confidence.
+    
+    # Calculamos las pri¡obabilidades que asocian cada una de las diferentes cajas
+
+    box_scores = box_confidence*box_class_probs
+   
+   # De entre todas las clases nos quedamos con la que mayor probabilidad tenga
+    box_classes = K.argmax(box_scores, axis=-1)
+    box_class_scores = K.max(box_scores, axis=-1)
+
+    
+    #Nos quedamos con aquellas probabilidades que superan la barrera que hemos impuesto
+    filtering_mask = box_class_scores>= threshold
+
+    
+    #Ya solo queda aplicar nuestro filtro para obtener cada una de las salidas de la función definida
+    scores = tf.boolean_mask(box_class_scores, filtering_mask)
+    boxes = tf.boolean_mask(boxes, filtering_mask)
+    classes = tf.boolean_mask(box_classes, filtering_mask)
+ 
+    
+    return scores, boxes, classes
+    
+    def iou(box1, box2):
+    """Implement the intersection over union (IoU) between box1 and box2
+    
+    Arguments:
+    box1 -- first box, list object with coordinates (x1, y1, x2, y2)
+    box2 -- second box, list object with coordinates (x1, y1, x2, y2)
+    """
+
+   #Redefinimos las cajas reduciendo su número de forma que evitamos solapamientos
+    xi1 = max(box1[0],box2[0])
+    yi1 = max(box1[1],box2[1])
+    xi2 = min(box1[2],box2[2])
+    yi2 = min(box1[3],box2[3])
+    inter_area = (max(yi2-yi1,0))*(max(xi2-xi1,0))
+   
+    box1_area = (box1[3]-box1[1])*(box1[2]-box1[0])
+    box2_area = (box2[3]-box2[1])*(box2[2]-box2[0])
+    union_area = box1_area+box1_area-inter_area
+   
+    iou = (inter_area)/(union_area)
+ 
+    
+    return iou
+    
+    
+    
+     #Aplicamos Non-max suppression a nuestro conjunto de cajas seleccionadas con la función anterior.
+    
+    def yolo_non_max_suppression(scores, boxes, classes, max_boxes = 10, iou_threshold = 0.5):
+    
+   
+    
+    
+    max_boxes_tensor = K.variable(max_boxes, dtype='int32')     # tensor to be used in tf.image.non_max_suppression()
+    K.get_session().run(tf.variables_initializer([max_boxes_tensor])) # initialize variable max_boxes_tensor
+    
+   #Escogemos los índices de las cajas preseleccionadas
+   
+    nms_indices = tf.image.non_max_suppression(boxes,scores,max_boxes_tensor)
+   
+    #Redefinimos las variables de la función anterior.
+  
+    scores = K.gather(scores,nms_indices)
+    boxes = K.gather(boxes,nms_indices)
+    classes = K.gather(classes,nms_indices)
+
+    
+    return scores, boxes, classes
+    
+    #Aplicamos finalmente nuestro modelo YOLO con una banco de datos determinado
+    def yolo_eval(yolo_outputs, image_shape = (720., 1280.), max_boxes=10, score_threshold=.6, iou_threshold=.5):
+   
+  
+    
+    #Clasificamos las salidas del modelo YOLO que hemos establecido
+    box_confidence, box_xy, box_wh, box_class_probs = yolo_outputs
+
+    boxes = yolo_boxes_to_corners(box_xy, box_wh)
+
+    
+    scores, boxes, classes = yolo_filter_boxes(box_confidence, boxes, box_class_probs, threshold = .6)
+    
+    boxes = scale_boxes(boxes, image_shape)
+    scores, boxes, classes = yolo_non_max_suppression(scores, boxes, classes)
+   
+    
+    return scores, boxes, classes
