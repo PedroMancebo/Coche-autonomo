@@ -7,3 +7,5 @@ from app_utils import yolo_eval
 from os import listdir
 from os.path import isfile, join
 import os
+
+#Ahora procedemos
